@@ -72,14 +72,15 @@ def mix_sounds(all_data, y, n):
     max_len = max([len(all_data[id]) for id in ids])
 
     res_x = np.zeros((max_len, ))
-    res_y = 0
+    res_y = np.zeros_like(y[0])
     for coef, id in zip(coefs, ids):
         cur = all_data[id]
         res_x[:len(cur)] += coef * cur
-        res_y += coef * y[id]
+        # res_y += coef * y[id]
+        res_y[y[id] != 0] = 1
 
 
-    return res_x, res_y
+    return res_x, res_y, coefs, ids
 
 
 
@@ -100,7 +101,7 @@ class SoundAugDataset(Dataset):
         return self.max_size
     
     def __getitem__(self, idx):
-        x, y = mix_sounds(self.all_data, self.y, np.random.randint(1, self.max_n_mixed))
+        x, y, _, _ = mix_sounds(self.all_data, self.y, np.random.randint(1, self.max_n_mixed))
         x = self.transform(x).T
         result = {
             "x":x,
