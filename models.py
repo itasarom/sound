@@ -128,7 +128,8 @@ class Net(nn.Module):
         )
         
     
-    def forward(self, input, mask):
+    # def forward(self, input, mask):
+    def forward(self, input):
         batch_size = input.shape[0]
         
         x = self.attention(input)
