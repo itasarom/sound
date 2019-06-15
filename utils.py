@@ -9,6 +9,8 @@ import os
 import librosa
 import librosa.display
 
+from scipy.signal import convolve, fftconvolve
+
 from collections import defaultdict
 
 import tqdm
@@ -93,6 +95,13 @@ def read_audio(conf, pathname, trim_long_data):
     return y
 
 
+def trim_and_mel(conf, audio):
+    if len(audio) > conf.samples:
+        audio = audio[:conf.samples]
+
+    result = audio_to_melspectrogram(conf, audio)
+    return result
+
 def audio_to_melspectrogram(conf, audio):
     spectrogram = librosa.feature.melspectrogram(audio, 
                                                  sr=conf.sampling_rate,
@@ -170,6 +179,27 @@ def read_test(path, config, transform):
     y = np.zeros((len(all_data), len(columns)))
     
     return meta, all_data, y, max_len
+
+
+def read_filters(path, config, transform):
+    all_data = []
+    max_len = 0
+    meta = list(os.listdir(path))
+    meta.sort()
+    
+    
+    
+    for id, f in tqdm.tqdm(enumerate(meta), total=len(meta)):
+        pathname = os.path.join(path, f)
+        audio, sr = librosa.load(pathname, sr=config.sampling_rate)
+        all_data.append(transform(audio))
+
+    return meta, all_data
+
+
+def apply_filter(sound, filter):
+    modified_sound = fftconvolve(in2=filter, in1=sound) #/ np.linalg.norm(sound)
+    return modified_sound
 
 
 def predict(trainer, meta, loader):

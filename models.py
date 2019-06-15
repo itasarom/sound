@@ -164,7 +164,7 @@ class LSTMModel(nn.Module):
         )
         
     
-    def forward(self, input, mask):
+    def forward(self, input, mask=None):
         batch_size = input.shape[0]
         
         output, _ = self.lstm(input)

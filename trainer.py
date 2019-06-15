@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import label_ranking_average_precision_score
 from sklearn.model_selection import train_test_split
 
+import librosa
 from IPython import display
 
 from torch import nn
@@ -56,7 +57,7 @@ class SoundDataset(Dataset):
 
 
 
-def mix_sounds(all_data, y, n):
+def mix_sounds(all_data, y, n, params):
 
     
 
@@ -87,26 +88,69 @@ def mix_sounds(all_data, y, n):
 
 
 class SoundAugDataset(Dataset):
-    def __init__(self, all_data, y, transform, max_size, max_n_mixed, seed):
+    # def __init__(self, all_data, y, transform, max_size, max_n_mixed, seed):
+    def __init__(self, all_data, y, transform, config, params, room_filters, seed):
         super().__init__()
         np.random.seed(seed)
+
+        self.params = params
         self.all_data = all_data
         self.y = y
-        self.max_size = max_size
+
+        self.config = config
+        # max_duration, max_size, max_n_mixed
+        self.max_size = params["max_size"]
         self.transform = transform
-        self.max_n_mixed = max_n_mixed
+        self.max_n_mixed = params["max_n_mixed"]
+
+        self.room_filters = room_filters
         
     
     def __len__(self):
         return self.max_size
     
     def __getitem__(self, idx):
-        x, y, _, _ = mix_sounds(self.all_data, self.y, np.random.randint(1, self.max_n_mixed))
-        x = self.transform(x).T
+        x, y, coefs, ids = mix_sounds(self.all_data, self.y, np.random.randint(1, self.max_n_mixed + 1), self.params)
+
+
+        max_bits = self.config.sampling_rate * self.config.duration
+
+        if len(x) > max_bits:
+            start_crop = np.random.randint(0, len(x) - max_bits)
+            x = x[start_crop:start_crop + max_bits]
+            # print(max_bits, len(x))
+
+
+        if "change_pitch" in self.params:
+            if np.random.rand() < self.params["change_pitch"]:
+                delta = np.random.randint(-self.params["change_pitch_max"], self.params["change_pitch_max"])
+                x = librosa.effects.pitch_shift(x, sr=self.config.sampling_rate, n_steps=delta)
+
+
+        if "add_echo" in self.params:
+            if np.random.rand() < self.params["add_echo"]:
+                x = utils.apply_filter(x, self.room_filters[np.random.randint(len(self.room_filters))])
+        
+
+        if "harmonic_percussive" in self.params:
+            if np.random.rand() < self.params["harmonic_percussive"]:
+                if np.random.randint(0, 2):
+                    x = librosa.effects.percussive(x)
+                else:
+                    x = librosa.effects.harmonic(x)
+        
+        if "noise_magnitude" in self.params:
+            x += self.params["noise_magnitude"] * np.random.randn(*x.shape)
+
+
+
+        x_res = self.transform(x).T
         result = {
-            "x":x,
+            "x":x_res,
+            "raw_x":x,
             "y":y,
-            "mask":np.ones(x.shape[:-1])
+            "coefs":coefs,
+            "ids":ids
         }
         
         return result
@@ -135,6 +179,58 @@ def collate_fn(samples):
     return dict(x=x, y=y, mask=mask)
 
 
+
+class AugmentationCollator:
+    def __init__(self, config, transform):
+        self.config = config
+        self.transform = transform
+
+    def __call__(self, samples):
+        x = []
+        y = []
+        mask = []
+        ss = []
+
+
+        # max_len = max([len(s['x']) for s in samples])
+
+
+        for s in samples:
+            cur_x = s['x']
+            # padding = max_len - len(cur_x)    # add padding at both ends
+            # offset = padding // 2
+            # if padding > 0:
+                # offset = np.random.randint(0, padding)
+                # cur_x = np.pad(cur_x, (offset, max_len - len(cur_x) - offset), 'constant')
+            # else:
+                # cur_x = 
+            # else:
+                # offset = 0
+            
+            ss.append(cur_x)
+
+            # print(cur_x)
+
+            # cur_x = cur_x)
+            x.append(torch.Tensor(cur_x))
+            # print(x[-1].shape)
+            y.append(s["y"][None])
+            # print(cur_x.shape)
+            # mask.append(s["mask"][None])
+        
+        
+        x = nn.utils.rnn.pad_sequence(x, batch_first=True, padding_value=0)
+        # x = np.concatenate(x, axis=0)
+        y = np.concatenate(y, axis=0)
+        # mask = np.concatenate(mask, axis=0)
+        
+        # x = torch.Tensor(x)
+        y = torch.Tensor(y)
+        # mask = torch.Tensor(mask)
+        
+        return dict(x=x, y=y, ss=ss)
+
+
 def loss_function(logits, y):
     pred = F.log_softmax(logits, dim=1)
     res = (pred * y).sum(dim=-1)
@@ -142,10 +238,12 @@ def loss_function(logits, y):
 
 
 class Trainer:
-    def __init__(self, model, optimizer_factory, device, trainer_params):
+    def __init__(self, model, optimizer_factory, scheduler_factory, device, trainer_params):
         self.model = model
         self.device = device
         self.optimizer = optimizer_factory(model.parameters())
+
+        self.scheduler = scheduler_factory(self.optimizer)
 
 
         self.train_metrics = defaultdict(list)
@@ -173,7 +271,7 @@ class Trainer:
         total_x = 0
         for b in loader:
             x = b['x'].to(self.device)
-            mask = b['mask'].to(self.device)
+            # mask = b['mask'].to(self.device)
             y = b['y'].to(self.device)
             # logits = self.model.forward(x, mask)
             logits = self.model.forward(x)
@@ -221,7 +319,7 @@ class Trainer:
                 self.model.train()
                 
                 x = batch['x'].to(self.device)
-                mask = batch['mask'].to(self.device)
+                # mask = batch['mask'].to(self.device)
                 y = batch['y'].to(self.device)
                 # logits = self.model.forward(x, mask)
                 logits = self.model.forward(x)
@@ -250,13 +348,22 @@ class Trainer:
                         
                 self.total_iterations = iteration_id
 
+            validation_result = self.validate(test_loader)
+                    
+            self.val_metrics['iterations'].append(self.total_iterations)
+            for key, value in validation_result.items():
+                self.val_metrics[key].append(value)
+
+            self.save()
+            self.scheduler.step(validation_result['loss'])
+
 
     def predict(loader):
         self.model.eval()
         result = []
         for b in loader:
             x = b['x'].to(device)
-            mask = b['mask'].to(device)
+            # mask = b['mask'].to(device)
             pred = self.model.forward(x, mask)
             
             result.append(pred.detach().cpu().numpy())
