@@ -114,7 +114,7 @@ class SoundAugDataset(Dataset):
 
 
         max_bits = self.config.sampling_rate * self.config.duration
-
+        # print(max_bits, len(x))
         if len(x) > max_bits:
             start_crop = np.random.randint(0, len(x) - max_bits)
             x = x[start_crop:start_crop + max_bits]
@@ -129,6 +129,7 @@ class SoundAugDataset(Dataset):
 
         if "add_echo" in self.params:
             if np.random.rand() < self.params["add_echo"]:
+                #np.random.randint(len(self.room_filters)//20)
                 x = utils.apply_filter(x, self.room_filters[np.random.randint(len(self.room_filters))])
         
 
@@ -142,6 +143,10 @@ class SoundAugDataset(Dataset):
         if "noise_magnitude" in self.params:
             x += self.params["noise_magnitude"] * np.random.randn(*x.shape)
 
+
+        if len(x) > max_bits:
+            start_crop = np.random.randint(0, len(x) - max_bits)
+            x = x[start_crop:start_crop + max_bits]
 
 
         x_res = self.transform(x).T
@@ -190,6 +195,7 @@ class AugmentationCollator:
         y = []
         mask = []
         ss = []
+        raw_x = []
 
 
         # max_len = max([len(s['x']) for s in samples])
@@ -215,6 +221,7 @@ class AugmentationCollator:
             x.append(torch.Tensor(cur_x))
             # print(x[-1].shape)
             y.append(s["y"][None])
+            raw_x.append(s['raw_x'])
             # print(cur_x.shape)
             # mask.append(s["mask"][None])
         
@@ -228,7 +235,7 @@ class AugmentationCollator:
         y = torch.Tensor(y)
         # mask = torch.Tensor(mask)
         
-        return dict(x=x, y=y, ss=ss)
+        return dict(x=x, y=y, ss=ss, raw_x=raw_x)
 
 
 def loss_function(logits, y):

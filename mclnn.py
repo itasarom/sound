@@ -5,8 +5,26 @@ from torch import nn
 import torch.nn.functional as F
 
 
+def construct_mask(in_channels, out_channels, bandwidth, overlap):
+    a = np.arange(1, bandwidth + 1)
+    g = np.arange(1, int(np.ceil((in_channels * out_channels) / (in_channels + bandwidth - overlap))) + 1)
+
+    mask = np.zeros((in_channels * out_channels))
+
+    for i in range(len(a)):
+        for j in range(len(g)):
+            lx = a[i] + (g[j] - 1) * (in_channels + bandwidth - overlap)
+            if lx <= in_channels * out_channels:
+                mask[lx - 1] = 1
+
+    binary_mask =  mask.reshape(out_channels, in_channels)
+
+    return binary_mask.astype(np.float32)
+
+
+
 class CLNNModule(nn.Module):
-    def __init__(self, in_channels, out_channels, window_size, stride=1, dilation=1, bias=True):
+    def __init__(self, in_channels, out_channels, window_size, stride=1, dilation=1, bias=True, mask_params=None):
         super().__init__()
 
 
@@ -18,6 +36,13 @@ class CLNNModule(nn.Module):
             kernel_size=2*window_size + 1, dilation=dilation, 
             stride=1, padding=window_size, padding_mode="zeros")
 
+        self.mask_params = mask_params
+
+        if mask_params is not None:
+            self.mask = construct_mask(in_channels, out_channels, mask_params["bandwidth"], mask_params["overlap"])
+            self.mask = torch.from_numpy(self.mask)
+            self.mask = nn.Parameter(self.mask, requires_grad=False)
+
 
     def forward(self, input):
         batch_size, max_time, n_features = input.shape
@@ -26,7 +51,18 @@ class CLNNModule(nn.Module):
 
         input = input.permute(0, 2, 1)
 
-        result = self.convolution(input)
+        if self.mask_params is None:
+            result = self.convolution(input)
+        else:
+            weight = self.convolution.weight * self.mask.unsqueeze(-1)
+            result = F.conv1d(
+                        input, 
+                        weight=weight, bias=self.convolution.bias, 
+                        stride=self.convolution.stride, padding=self.convolution.padding, 
+                        dilation=self.convolution.dilation, groups=self.convolution.groups
+                    )
+
+
 
         result = result.permute(0, 2, 1)
 
