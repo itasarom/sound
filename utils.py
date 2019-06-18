@@ -158,6 +158,7 @@ def read_dataset(path, config, transform):
             y[id, config.column_encoder[l]] = 1.0
 
 
+    return all_data, y, max_len
 
 def read_dataset_split(metapath, path, config, transform):
     labels = pd.read_csv(metapath)
