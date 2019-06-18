@@ -157,6 +157,31 @@ def read_dataset(path, config, transform):
         for l in labels:
             y[id, config.column_encoder[l]] = 1.0
 
+
+
+def read_dataset_split(metapath, path, config, transform):
+    labels = pd.read_csv(metapath)
+    labels = labels.set_index("fname")
+    meta = list(os.listdir(path))
+    meta.sort()
+    all_data = []
+    all_labels = []
+    
+    max_len = 0
+    
+    for id, f in tqdm.tqdm(enumerate(meta), total=len(meta)):
+        label = labels.loc[f]['labels']
+        all_labels.append(label)
+        all_data.append(transform(read_audio(config, os.path.join(path, f), trim_long_data=config.trim_long_data)))
+        max_len = max(all_data[-1].shape[-1], max_len)
+
+    
+    y = np.zeros((len(all_data), len(config.columns)))
+    for id, label in enumerate(all_labels):
+        labels = label.split(",")
+        for l in labels:
+            y[id, config.column_encoder[l]] = 1.0
+
     
     
     
@@ -210,3 +235,85 @@ def predict(trainer, meta, loader):
     result = result.set_index('fname').reset_index()
 
     return result
+
+
+
+sampling_rate = 44100 # от оргов контеста
+duration = 2 # сколько секунд от записи хотим взять
+n_samples = sampling_rate * duration
+n_mels=128 # дефолтный параметр в самой либросе
+
+def audio2mel(audio):
+    #audio, _ = librosa.effects.trim(audio) # убирает участки тишины из audio, почти не влияет, да и хз, может вредит
+    melspectr = librosa.feature.melspectrogram(
+        y=audio,
+        sr=sampling_rate,
+        n_mels=n_mels, # количество мел-признаков, дефолтное значение для librosa
+        n_fft=n_mels * 20, # не знаю, почему так, но это ширина окна для FFT (размер базиса, получается?)
+        hop_length=346 * duration, # длина фрейма, n_samples // 128, чтобы получить 128 фреймов (или что-то такое)
+        # ось времени таки есть!
+        fmax=sampling_rate // 2, # максимальная частота сигнала, дефолтное значение для librosa,
+        fmin = 0., # дефолтная наименьшая частота сигнала
+    )
+    melspectr = librosa.power_to_db(melspectr).astype(np.float32) # перевод в дб
+    return melspectr
+
+
+def read_dataset_kirill(path, config, transform):
+    meta = pd.read_csv(path + ".csv")
+    all_data = []
+    all_labels = []
+    
+    max_len = 0
+    
+    for id, (f, label) in tqdm.tqdm(enumerate(zip(meta.fname, meta.labels)), total=len(meta)):
+        all_labels.append(label)
+        fp = os.path.join(path, f)
+        y, _ = librosa.load(fp, sr=sampling_rate) # загрузка аудиофайла
+        # в кернелах они делают паддинг нулями с двух сторон, я делаю паддинг нулями в начале записи
+        y = np.concatenate([[0] * (n_samples - len(y)), y[:n_samples]]) # паддинг
+        mel = audio2mel(y)
+        all_data.append(mel)
+        max_len = max(all_data[-1].shape[-1], max_len)
+
+    
+    y = np.zeros((len(all_data), len(config.columns)))
+    for id, label in enumerate(all_labels):
+        labels = label.split(",")
+        for l in labels:
+            y[id, config.column_encoder[l]] = 1.0
+
+    return all_data, y, max_len
+
+
+
+
+def read_dataset_kirill_split(metapath, path, config, transform):
+    labels = pd.read_csv(metapath)
+    labels = labels.set_index("fname")
+    meta = list(os.listdir(path))
+    meta.sort()
+    all_data = []
+    all_labels = []
+    
+    max_len = 0
+    
+    for id, f in tqdm.tqdm(enumerate(meta), total=len(meta)):
+        label = labels.loc[f]['labels']     
+        all_labels.append(label)   
+        fp = os.path.join(path, f)
+        y, _ = librosa.load(fp, sr=sampling_rate) # загрузка аудиофайла
+        # в кернелах они делают паддинг нулями с двух сторон, я делаю паддинг нулями в начале записи
+        y = np.concatenate([[0] * (n_samples - len(y)), y[:n_samples]]) # паддинг
+        mel = audio2mel(y)
+        all_data.append(mel)
+        max_len = max(all_data[-1].shape[-1], max_len)
+
+    
+    y = np.zeros((len(all_data), len(config.columns)))
+    for id, label in enumerate(all_labels):
+        labels = label.split(",")
+        for l in labels:
+            y[id, config.column_encoder[l]] = 1.0
+
+    return all_data, y, max_len

@@ -184,11 +184,34 @@ def collate_fn(samples):
     return dict(x=x, y=y, mask=mask)
 
 
+def collate_fn_2(samples):
+    x = []
+    y = []
+    mask = []
+    
+    for s in samples:
+        x.append(s["x"][None])
+        y.append(s["y"][None])
+        mask.append(s["mask"][None])
+    
+    
+    x = np.concatenate(x, axis=0)
+    y = np.concatenate(y, axis=0)
+    mask = np.concatenate(mask, axis=0)
+    
+    x = torch.Tensor(x)
+    y = torch.Tensor(y)
+    mask = torch.Tensor(mask)
+    
+    return [x, y]
+
+
 
 class AugmentationCollator:
-    def __init__(self, config, transform):
+    def __init__(self, config, transform, return_mode=None):
         self.config = config
         self.transform = transform
+        self.return_mode = return_mode
 
     def __call__(self, samples):
         x = []
@@ -235,7 +258,10 @@ class AugmentationCollator:
         y = torch.Tensor(y)
         # mask = torch.Tensor(mask)
         
-        return dict(x=x, y=y, ss=ss, raw_x=raw_x)
+        if self.return_mode is None:
+            return dict(x=x, y=y, ss=ss, raw_x=raw_x)
+        else:
+            return [x, y]
 
 
 def loss_function(logits, y):
@@ -267,6 +293,8 @@ class Trainer:
         os.makedirs(new_path)
 
         self.save_path = new_path
+
+        print("Saving the weights and metrics to ", self.save_path)
 
 
 
@@ -322,6 +350,7 @@ class Trainer:
 
         for epoch_id in range(self.total_epochs, self.total_epochs + params['epochs']):
             self.total_epochs = epoch_id
+            start_time = time.time()
             for iteration_id, batch in enumerate(train_loader, start=self.total_iterations):
                 self.model.train()
                 
@@ -329,6 +358,7 @@ class Trainer:
                 # mask = batch['mask'].to(self.device)
                 y = batch['y'].to(self.device)
                 # logits = self.model.forward(x, mask)
+                # print(y.shape)
                 logits = self.model.forward(x)
                 loss = loss_function(logits, y)
                 self.optimizer.zero_grad()
@@ -356,6 +386,7 @@ class Trainer:
                 self.total_iterations = iteration_id
 
             validation_result = self.validate(test_loader)
+            self.last_epoch_duration = time.time() - start_time
                     
             self.val_metrics['iterations'].append(self.total_iterations)
             for key, value in validation_result.items():
@@ -384,5 +415,26 @@ class Trainer:
         
 
             
+def validate_final(model, loader, device):
+        model.eval()
+        losses = 0
+        target_metrics = 0
+        total_x = 0
+        loss_function = nn.BCEWithLogitsLoss()
+        for b in loader:
+            x = b['x'].to(device)
+            # mask = b['mask'].to(self.device)
+            y = b['y'].to(device)
+            # logits = self.model.forward(x, mask)
+            logits = model.forward(x)
+            loss = loss_function(logits, y)
+            losses += loss.item() * len(x)
+            target_metric = calculate_overall_lwlrap_sklearn(y.cpu().numpy(), logits.detach().cpu().numpy())
+            target_metrics += target_metric * len(x)
+            total_x += len(x)
             
+        losses /= total_x
+        target_metrics /= total_x
+        
+        return {"loss":losses, "target_metric":target_metrics}
     
